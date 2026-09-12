@@ -135,9 +135,9 @@ def env(monkeypatch):
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
     Base.metadata.create_all(eng)
-    SessionLocal = sessionmaker(bind=eng, expire_on_commit=False)
+    session_local = sessionmaker(bind=eng, expire_on_commit=False)
 
-    db = SessionLocal()
+    db = session_local()
     manage = Permission(name="cameras.manage", description="")
     viewer_role = Role(name="viewer", description="")
     operator_role = Role(name="operator", description="")
@@ -181,7 +181,7 @@ def env(monkeypatch):
     app.include_router(cameras_router.router, prefix="/api/v1")
 
     def _db():
-        s = SessionLocal()
+        s = session_local()
         try:
             yield s
         finally:
@@ -191,7 +191,7 @@ def env(monkeypatch):
     app.dependency_overrides[get_db] = _db
     app.dependency_overrides[core_auth.get_current_active_user] = lambda: current["user"]
     with TestClient(app) as tc:
-        yield tc, current, {"viewer": viewer, "operator": operator}, SessionLocal
+        yield tc, current, {"viewer": viewer, "operator": operator}, session_local
 
 
 def test_import_route_needs_cameras_manage(env, monkeypatch):
@@ -227,7 +227,7 @@ def test_import_route_needs_cameras_manage(env, monkeypatch):
 
 
 def test_import_route_imports_and_skips_duplicates(env, monkeypatch):
-    tc, current, users, SessionLocal = env
+    tc, current, users, session_local = env
     current["user"] = users["operator"]
 
     async def _bootstrap(**_kwargs):
@@ -307,7 +307,7 @@ def test_import_route_imports_and_skips_duplicates(env, monkeypatch):
     assert "Skipped duplicate" in body["skipped"][0]["message"]
     assert body["failed"] == []
 
-    db = SessionLocal()
+    db = session_local()
     try:
         created = db.query(Camera).filter(Camera.ip_address == "10.0.0.8").one()
         assert created.rtsp_url == "rtsps://10.0.0.2:7441/new-main"
