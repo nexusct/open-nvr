@@ -240,6 +240,27 @@ class CameraCreate(CameraBase):
     password: str | None = Field(None, max_length=255)
 
 
+class UnifiProtectImportRequest(BaseModel):
+    base_url: str = Field(..., min_length=1, max_length=300)
+    username: str = Field(..., min_length=1, max_length=100)
+    password: str = Field(..., max_length=255)
+    verify_tls: bool = False
+
+
+class ImportedCameraResult(BaseModel):
+    name: str
+    ip_address: str | None = None
+    camera_id: int | None = None
+    message: str
+
+
+class UnifiProtectImportResponse(BaseModel):
+    imported: list[ImportedCameraResult] = []
+    skipped: list[ImportedCameraResult] = []
+    failed: list[ImportedCameraResult] = []
+    total_seen: int = 0
+
+
 class RecordingCreate(RecordingBase):
     """Schema for creating a new recording."""
 

@@ -25,7 +25,7 @@ import { syncCameraIdentity } from '../lib/cameraIdentity'
 import type { IdentityField } from '../lib/cameraIdentity'
 import { Modal } from './Modal'
 import { Badge, Button, EmptyState } from './ui'
-import { Camera, ChevronDown, CheckCircle, Loader2, Plus, RefreshCw, Search, SearchX, Video, X } from 'lucide-react'
+import { Camera, ChevronDown, CheckCircle, Loader2, Plus, RefreshCw, Search, SearchX, Server, Video, X } from 'lucide-react'
 
 type DiscoveredCamera = { ip: string; scheme?: string; service_urls?: string[] }
 
@@ -77,7 +77,7 @@ export function AddCameraDialog({
   existingCameras?: Array<{id: number, name: string}>
   title?: string
 }) {
-  const [mode, setMode] = useState<'discover' | 'select' | 'manual'>('discover')
+  const [mode, setMode] = useState<'discover' | 'select' | 'manual' | 'unifi'>('discover')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
@@ -142,6 +142,12 @@ export function AddCameraDialog({
     username: '',
     password: '',
     rtsp_url: '',
+  })
+  const [unifiForm, setUnifiForm] = useState({
+    base_url: '',
+    username: 'protect-user',
+    password: '',
+    verify_tls: false,
   })
 
   // The address, port and credentials are captured here and again inside the
@@ -590,6 +596,49 @@ export function AddCameraDialog({
     })
   }
 
+  const handleImportUnifiNvr = async () => {
+    if (!unifiForm.base_url.trim() || !unifiForm.username.trim() || !unifiForm.password) {
+      setError('Controller URL, username, and password are required')
+      return
+    }
+
+    setLoading(true)
+    setError(null)
+    try {
+      const response = await apiService.importUnifiProtectNvr({
+        base_url: unifiForm.base_url.trim(),
+        username: unifiForm.username.trim(),
+        password: unifiForm.password,
+        verify_tls: unifiForm.verify_tls,
+      })
+      const imported = response?.data?.imported || []
+      const skipped = response?.data?.skipped || []
+      const failed = response?.data?.failed || []
+
+      if (imported.length === 0) {
+        const firstFailure = failed[0]?.message || skipped[0]?.message || 'No cameras were imported.'
+        setError(firstFailure)
+        return
+      }
+
+      const summary = [
+        `Imported ${imported.length} camera${imported.length === 1 ? '' : 's'}.`,
+        skipped.length ? `Skipped ${skipped.length} duplicate${skipped.length === 1 ? '' : 's'}.` : '',
+        failed.length ? `Failed ${failed.length}.` : '',
+      ].filter(Boolean).join(' ')
+      if (skipped.length || failed.length) window.alert(summary)
+      onCameraAdded(imported[0]?.camera_id)
+    } catch (e: any) {
+      setError(
+        (typeof e?.data?.detail === 'string' ? e.data.detail : null) ||
+        e?.message ||
+        'Failed to import UniFi Protect cameras'
+      )
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const handleSelectExisting = (cameraId: number) => {
     onCameraSelected?.(cameraId)
     onClose()
@@ -660,6 +709,12 @@ export function AddCameraDialog({
           label: loading ? 'Adding...' : 'Add Camera',
           onClick: handleAddManualCamera,
           disabled: loading || !form.name.trim() || !form.ip_address.trim(),
+        }
+      : mode === 'unifi'
+      ? {
+          label: loading ? 'Importing...' : 'Import NVR',
+          onClick: handleImportUnifiNvr,
+          disabled: loading || !unifiForm.base_url.trim() || !unifiForm.username.trim() || !unifiForm.password,
         }
       : mode === 'discover' && selectedCamera && !connected
       ? {
@@ -750,6 +805,15 @@ export function AddCameraDialog({
         >
           <Plus size={12} className="inline mr-1" />
           Manual
+        </button>
+        <button
+          role="tab"
+          aria-selected={mode === 'unifi'}
+          className={`flex-1 px-3 py-2 text-xs ${mode === 'unifi' ? 'bg-[var(--accent)]/20 text-[var(--accent)] border-b-2 border-[var(--accent)]' : 'text-[var(--text-dim)] hover:bg-[var(--panel-2)]'}`}
+          onClick={() => { setMode('unifi'); cancelScan(); setError(null) }}
+        >
+          <Server size={12} className="inline mr-1" />
+          UniFi Protect
         </button>
         {existingCameras.length > 0 && (
           <button
@@ -1316,6 +1380,68 @@ export function AddCameraDialog({
                 build the URL from the IP + credentials.
               </span>
             </label>
+          </div>
+        )}
+
+        {mode === 'unifi' && (
+          <div className="space-y-4">
+            <div className="rounded border border-[var(--border)] bg-[var(--panel-2)]/40 p-3 text-sm text-[var(--text-dim)]">
+              Import every UniFi Protect camera with RTSP enabled from one controller.
+              OpenNVR uses the Protect controller as the stream source.
+            </div>
+
+            <label className="flex flex-col gap-1">
+              <span className="text-xs text-[var(--text-dim)]">Controller URL or host *</span>
+              <input
+                type="text"
+                className="bg-[var(--bg-2)] border border-neutral-700 px-3 py-2 text-sm"
+                placeholder="https://192.168.1.10 or unifi-nvr.local"
+                value={unifiForm.base_url}
+                onChange={(e) => setUnifiForm(f => ({ ...f, base_url: e.target.value }))}
+              />
+            </label>
+
+            <div className="grid grid-cols-2 gap-3">
+              <label className="flex flex-col gap-1">
+                <span className="text-xs text-[var(--text-dim)]">Username *</span>
+                <input
+                  type="text"
+                  className="bg-[var(--bg-2)] border border-neutral-700 px-3 py-2 text-sm"
+                  value={unifiForm.username}
+                  onChange={(e) => setUnifiForm(f => ({ ...f, username: e.target.value }))}
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-xs text-[var(--text-dim)]">Password *</span>
+                <input
+                  type="password"
+                  className="bg-[var(--bg-2)] border border-neutral-700 px-3 py-2 text-sm"
+                  value={unifiForm.password}
+                  onChange={(e) => setUnifiForm(f => ({ ...f, password: e.target.value }))}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !loading) {
+                      e.preventDefault()
+                      handleImportUnifiNvr()
+                    }
+                  }}
+                />
+              </label>
+            </div>
+
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="accent-[var(--accent)]"
+                checked={unifiForm.verify_tls}
+                onChange={(e) => setUnifiForm(f => ({ ...f, verify_tls: e.target.checked }))}
+              />
+              Verify TLS certificate
+            </label>
+
+            <div className="rounded border border-[var(--border)] bg-[var(--bg-2)] p-3 text-xs text-[var(--text-dim)] space-y-1">
+              <div>Protect must have RTSP enabled for each camera you want to import.</div>
+              <div>The imported main stream uses Protect RTSPS on port 7441; when available, OpenNVR also stores a low-resolution substream.</div>
+            </div>
           </div>
         )}
 

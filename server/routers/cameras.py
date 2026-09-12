@@ -54,7 +54,10 @@ from schemas import (
     CameraUpdate,
     DeletedCameraInfo,
     DeletedCameraList,
+    ImportedCameraResult,
     TransportSecurityUpdate,
+    UnifiProtectImportRequest,
+    UnifiProtectImportResponse,
 )
 from services.audit_service import write_audit_log
 from services.camera_identity import path_name_for_camera, read_marker
@@ -67,6 +70,10 @@ from services.recording_watchdog import (
 )
 from services.storage_service import get_effective_recordings_base_path
 from services.stream_service import _build_stream_name, build_secure_whep_url_for_user
+from services.unifi_protect_service import (
+    UnifiProtectImportError,
+    UnifiProtectService,
+)
 from utils.mfa_guard import require_mfa_code
 from utils.url_redaction import redact_url_credentials
 
@@ -573,6 +580,145 @@ async def create_camera(
             exc_info=True,
         )
         raise
+
+
+@router.post("/import/unifi-protect", response_model=UnifiProtectImportResponse)
+async def import_unifi_protect_nvr(
+    import_request: UnifiProtectImportRequest,
+    force: bool = Query(
+        False,
+        description="Import even when IP or stream matches an existing camera.",
+    ),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_cameras_manage),
+    request: Request = None,
+):
+    """Import every RTSP-enabled camera exposed by one UniFi Protect controller."""
+    controller_host = UnifiProtectService.controller_host(import_request.base_url)
+    if not _host_is_internal(controller_host):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Refusing to reach non-internal address {controller_host!r} "
+                "(base_url); controllers are reached on the local network."
+            ),
+        )
+
+    try:
+        bootstrap = await UnifiProtectService.fetch_bootstrap(
+            base_url=import_request.base_url,
+            username=import_request.username,
+            password=import_request.password,
+            verify_tls=import_request.verify_tls,
+        )
+        candidates, failed_rows = UnifiProtectService.camera_candidates(
+            bootstrap, base_url=import_request.base_url
+        )
+    except UnifiProtectImportError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+    imported: list[ImportedCameraResult] = []
+    skipped: list[ImportedCameraResult] = []
+    failed = [
+        ImportedCameraResult(
+            name=str(row.get("name") or "Unknown Protect camera"),
+            ip_address=row.get("ip_address"),
+            message=str(row.get("message") or "Import failed."),
+        )
+        for row in failed_rows
+    ]
+
+    for candidate in candidates:
+        try:
+            camera_create = CameraCreate(
+                name=candidate.name,
+                ip_address=candidate.ip_address,
+                port=7441,
+                username=import_request.username,
+                password=import_request.password,
+                rtsp_url=candidate.rtsp_url,
+                substream_url=candidate.substream_url,
+                manufacturer=candidate.manufacturer,
+                model=candidate.model,
+                firmware_version=candidate.firmware_version,
+                serial_number=candidate.serial_number,
+                hardware_id=candidate.hardware_id,
+            )
+            _reject_external_camera_hosts(camera_create)
+            duplicates = _find_duplicate_cameras(
+                db, current_user.id, camera_create.ip_address, camera_create.rtsp_url
+            )
+            if duplicates and not force:
+                skipped.append(
+                    ImportedCameraResult(
+                        name=candidate.name,
+                        ip_address=candidate.ip_address,
+                        message=(
+                            "Skipped duplicate of "
+                            + ", ".join(str(d.name) for d in duplicates if d.name)
+                        ),
+                    )
+                )
+                continue
+            cam = await CameraService.create_camera(
+                db=db, camera_create=camera_create, owner_id=current_user.id
+            )
+            if duplicates:
+                _record_forced_duplicate_audit(
+                    db, current_user.id, cam, duplicates, request
+                )
+            imported.append(
+                ImportedCameraResult(
+                    name=cam.name,
+                    ip_address=cam.ip_address,
+                    camera_id=cam.id,
+                    message="Imported from UniFi Protect.",
+                )
+            )
+        except HTTPException as exc:
+            failed.append(
+                ImportedCameraResult(
+                    name=candidate.name,
+                    ip_address=candidate.ip_address,
+                    message=str(exc.detail),
+                )
+            )
+        except Exception as exc:
+            failed.append(
+                ImportedCameraResult(
+                    name=candidate.name,
+                    ip_address=candidate.ip_address,
+                    message=f"Import failed: {exc}",
+                )
+            )
+
+    try:
+        write_audit_log(
+            db,
+            action="camera.import_unifi_protect",
+            user_id=current_user.id,
+            entity_type="integration",
+            entity_id=controller_host,
+            details={
+                "base_url": import_request.base_url,
+                "imported": len(imported),
+                "skipped": len(skipped),
+                "failed": len(failed),
+            },
+            ip=request.client.host if request and request.client else None,
+            user_agent=request.headers.get("user-agent") if request else None,
+        )
+    except Exception as exc:
+        camera_logger.error(
+            f"Failed to write UniFi Protect import audit log: {exc}", exc_info=True
+        )
+
+    return UnifiProtectImportResponse(
+        imported=imported,
+        skipped=skipped,
+        failed=failed,
+        total_seen=len(candidates) + len(failed_rows),
+    )
 
 
 @router.get("/", response_model=CameraList)

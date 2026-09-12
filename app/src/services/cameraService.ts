@@ -46,6 +46,12 @@ export const cameraService = {
     api.get(`/api/v1/cameras/${cameraId}/snapshot`, { responseType: 'blob' }),
   createCamera: (payload: any, opts: { force?: boolean } = {}) =>
     api.post('/api/v1/cameras/', payload, opts.force ? { params: { force: true } } : undefined),
+  importUnifiProtectNvr: (payload: { base_url: string; username: string; password: string; verify_tls?: boolean }, opts: { force?: boolean } = {}) =>
+    api.post(
+      '/api/v1/cameras/import/unifi-protect',
+      payload,
+      opts.force ? { params: { force: true } } : undefined,
+    ),
   updateCamera: (cameraId: number, payload: any) => api.put(`/api/v1/cameras/${cameraId}`, payload),
   // Suggestions + live availability for the camera Assignments editor.
   getAssignableSkills: () => api.get('/api/v1/cameras/assignable-skills'),
