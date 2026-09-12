@@ -316,3 +316,70 @@ def test_import_route_imports_and_skips_duplicates(env, monkeypatch):
         assert created.password == "Passw0rd!"
     finally:
         db.close()
+
+
+def test_import_route_skips_substream_duplicates(env, monkeypatch):
+    tc, current, users, session_local = env
+    current["user"] = users["operator"]
+
+    db = session_local()
+    db.add(
+        Camera(
+            name="Uses Same Low Stream",
+            ip_address="10.0.0.55",
+            port=7441,
+            owner_id=users["operator"].id,
+            rtsp_url="rtsps://10.0.0.2:7441/other-main",
+            substream_url="rtsps://10.0.0.2:7441/shared-low",
+            is_active=True,
+        )
+    )
+    db.commit()
+    db.close()
+
+    async def _bootstrap(**_kwargs):
+        return {"ok": True}
+
+    def _candidates(_bootstrap, *, base_url):
+        assert base_url == "https://10.0.0.2"
+        return (
+            [
+                UnifiProtectCameraCandidate(
+                    name="Would Duplicate Low Stream",
+                    ip_address="10.0.0.8",
+                    rtsp_url="rtsps://10.0.0.2:7441/new-main",
+                    substream_url="rtsps://10.0.0.2:7441/shared-low",
+                    manufacturer="Ubiquiti",
+                    model="G5",
+                    firmware_version="2.0",
+                    serial_number="cam-3",
+                    hardware_id="cc",
+                )
+            ],
+            [],
+        )
+
+    async def _create(db, camera_create, owner_id):
+        raise AssertionError("duplicate import should have been skipped before create")
+
+    monkeypatch.setattr(
+        UnifiProtectService, "fetch_bootstrap", staticmethod(_bootstrap)
+    )
+    monkeypatch.setattr(
+        UnifiProtectService, "camera_candidates", staticmethod(_candidates)
+    )
+    monkeypatch.setattr(CameraService, "create_camera", staticmethod(_create))
+
+    response = tc.post(
+        "/api/v1/cameras/import/unifi-protect",
+        json={
+            "base_url": "https://10.0.0.2",
+            "username": "protect",
+            "password": "Passw0rd!",
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["imported"] == []
+    assert len(body["skipped"]) == 1
+    assert "Skipped duplicate" in body["skipped"][0]["message"]

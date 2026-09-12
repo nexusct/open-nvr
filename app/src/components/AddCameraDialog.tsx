@@ -708,7 +708,7 @@ export function AddCameraDialog({
           onClick: handleAddManualCamera,
           disabled: loading || !form.name.trim() || !form.ip_address.trim(),
         }
-      : mode === 'unifi' && unifiImportResult
+      : mode === 'unifi' && unifiImportResult && unifiImportResult.imported.length > 0
       ? {
           label: 'Done',
           onClick: () => onCameraAdded(),
@@ -1479,8 +1479,8 @@ export function AddCameraDialog({
                       <div>
                         <div className="font-medium text-[var(--text)] mb-1">Skipped</div>
                         <ul className="space-y-1">
-                          {unifiImportResult.skipped.map((row) => (
-                            <li key={`skip-${row.name}-${row.ip_address || ''}`}>
+                          {unifiImportResult.skipped.map((row, index) => (
+                            <li key={`skip-${index}-${row.name}-${row.ip_address || ''}`}>
                               <span className="text-[var(--text)]">{row.name}</span>
                               {row.ip_address ? ` (${row.ip_address})` : ''} — {row.message}
                             </li>
@@ -1492,8 +1492,8 @@ export function AddCameraDialog({
                       <div>
                         <div className="font-medium text-[var(--text)] mb-1">Failed</div>
                         <ul className="space-y-1">
-                          {unifiImportResult.failed.map((row) => (
-                            <li key={`fail-${row.name}-${row.ip_address || ''}`}>
+                          {unifiImportResult.failed.map((row, index) => (
+                            <li key={`fail-${index}-${row.name}-${row.ip_address || ''}`}>
                               <span className="text-[var(--text)]">{row.name}</span>
                               {row.ip_address ? ` (${row.ip_address})` : ''} — {row.message}
                             </li>

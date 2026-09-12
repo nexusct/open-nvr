@@ -230,6 +230,30 @@ def _find_duplicate_cameras(
     )
 
 
+def _find_duplicate_cameras_for_import(
+    db: Session,
+    user_id: int,
+    ip_address: str,
+    main_rtsp_url: str | None,
+    substream_url: str | None,
+) -> list[Camera]:
+    """Import-time duplicate check: IP plus either imported stream URL against
+    either stored stream field.
+    """
+    conditions = [Camera.ip_address == ip_address]
+    for url in {main_rtsp_url, substream_url} - {None}:
+        conditions.extend((Camera.rtsp_url == url, Camera.substream_url == url))
+    return (
+        db.query(Camera)
+        .filter(
+            Camera.owner_id == user_id,
+            Camera.deleted_at.is_(None),
+            or_(*conditions),
+        )
+        .all()
+    )
+
+
 def _record_forced_duplicate_audit(
     db: Session,
     user_id: int,
@@ -645,8 +669,12 @@ async def import_unifi_protect_nvr(
                 hardware_id=candidate.hardware_id,
             )
             _reject_external_camera_hosts(camera_create)
-            duplicates = _find_duplicate_cameras(
-                db, current_user.id, camera_create.ip_address, camera_create.rtsp_url
+            duplicates = _find_duplicate_cameras_for_import(
+                db,
+                current_user.id,
+                camera_create.ip_address,
+                camera_create.rtsp_url,
+                camera_create.substream_url,
             )
             if duplicates and not force:
                 skipped.append(
