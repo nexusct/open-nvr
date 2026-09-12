@@ -255,9 +255,9 @@ class ImportedCameraResult(BaseModel):
 
 
 class UnifiProtectImportResponse(BaseModel):
-    imported: list[ImportedCameraResult] = []
-    skipped: list[ImportedCameraResult] = []
-    failed: list[ImportedCameraResult] = []
+    imported: list[ImportedCameraResult] = Field(default_factory=list)
+    skipped: list[ImportedCameraResult] = Field(default_factory=list)
+    failed: list[ImportedCameraResult] = Field(default_factory=list)
     total_seen: int = 0
 
 

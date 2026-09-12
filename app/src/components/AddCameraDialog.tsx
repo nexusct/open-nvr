@@ -28,6 +28,7 @@ import { Badge, Button, EmptyState } from './ui'
 import { Camera, ChevronDown, CheckCircle, Loader2, Plus, RefreshCw, Search, SearchX, Server, Video, X } from 'lucide-react'
 
 type DiscoveredCamera = { ip: string; scheme?: string; service_urls?: string[] }
+type ImportResultRow = { name: string; ip_address?: string | null; camera_id?: number | null; message: string }
 
 // The device's ONVIF port lives inside its service URL. The server sends
 // {ip, scheme, service_urls}; both the subtitle and the connect call need
@@ -149,6 +150,11 @@ export function AddCameraDialog({
     password: '',
     verify_tls: false,
   })
+  const [unifiImportResult, setUnifiImportResult] = useState<{
+    imported: ImportResultRow[]
+    skipped: ImportResultRow[]
+    failed: ImportResultRow[]
+  } | null>(null)
 
   // The address, port and credentials are captured here and again inside the
   // RTSP URL. Re-sync on blur so a camera cannot be *created* already
@@ -604,6 +610,7 @@ export function AddCameraDialog({
 
     setLoading(true)
     setError(null)
+    setUnifiImportResult(null)
     try {
       const response = await apiService.importUnifiProtectNvr({
         base_url: unifiForm.base_url.trim(),
@@ -615,19 +622,10 @@ export function AddCameraDialog({
       const skipped = response?.data?.skipped || []
       const failed = response?.data?.failed || []
 
-      if (imported.length === 0) {
-        const firstFailure = failed[0]?.message || skipped[0]?.message || 'No cameras were imported.'
-        setError(firstFailure)
-        return
+      setUnifiImportResult({ imported, skipped, failed })
+      if (imported.length === 0 && failed.length === 0 && skipped.length === 0) {
+        setError('No cameras were imported.')
       }
-
-      const summary = [
-        `Imported ${imported.length} camera${imported.length === 1 ? '' : 's'}.`,
-        skipped.length ? `Skipped ${skipped.length} duplicate${skipped.length === 1 ? '' : 's'}.` : '',
-        failed.length ? `Failed ${failed.length}.` : '',
-      ].filter(Boolean).join(' ')
-      if (skipped.length || failed.length) window.alert(summary)
-      onCameraAdded(imported[0]?.camera_id)
     } catch (e: any) {
       setError(
         (typeof e?.data?.detail === 'string' ? e.data.detail : null) ||
@@ -709,6 +707,12 @@ export function AddCameraDialog({
           label: loading ? 'Adding...' : 'Add Camera',
           onClick: handleAddManualCamera,
           disabled: loading || !form.name.trim() || !form.ip_address.trim(),
+        }
+      : mode === 'unifi' && unifiImportResult
+      ? {
+          label: 'Done',
+          onClick: () => onCameraAdded(),
+          disabled: false,
         }
       : mode === 'unifi'
       ? {
@@ -792,7 +796,7 @@ export function AddCameraDialog({
           role="tab"
           aria-selected={mode === 'discover'}
           className={`flex-1 px-3 py-2 text-xs ${mode === 'discover' ? 'bg-[var(--accent)]/20 text-[var(--accent)] border-b-2 border-[var(--accent)]' : 'text-[var(--text-dim)] hover:bg-[var(--panel-2)]'}`}
-          onClick={() => { setMode('discover'); resetConnectStep() }}
+          onClick={() => { setMode('discover'); resetConnectStep(); setUnifiImportResult(null) }}
         >
           <Search size={12} className="inline mr-1" />
           Discover
@@ -801,7 +805,7 @@ export function AddCameraDialog({
           role="tab"
           aria-selected={mode === 'manual'}
           className={`flex-1 px-3 py-2 text-xs ${mode === 'manual' ? 'bg-[var(--accent)]/20 text-[var(--accent)] border-b-2 border-[var(--accent)]' : 'text-[var(--text-dim)] hover:bg-[var(--panel-2)]'}`}
-          onClick={() => { setMode('manual'); cancelScan(); setError(null) }}
+          onClick={() => { setMode('manual'); cancelScan(); setError(null); setUnifiImportResult(null) }}
         >
           <Plus size={12} className="inline mr-1" />
           Manual
@@ -810,7 +814,7 @@ export function AddCameraDialog({
           role="tab"
           aria-selected={mode === 'unifi'}
           className={`flex-1 px-3 py-2 text-xs ${mode === 'unifi' ? 'bg-[var(--accent)]/20 text-[var(--accent)] border-b-2 border-[var(--accent)]' : 'text-[var(--text-dim)] hover:bg-[var(--panel-2)]'}`}
-          onClick={() => { setMode('unifi'); cancelScan(); setError(null) }}
+          onClick={() => { setMode('unifi'); cancelScan(); setError(null); setUnifiImportResult(null) }}
         >
           <Server size={12} className="inline mr-1" />
           UniFi Protect
@@ -820,7 +824,7 @@ export function AddCameraDialog({
             role="tab"
             aria-selected={mode === 'select'}
             className={`flex-1 px-3 py-2 text-xs ${mode === 'select' ? 'bg-[var(--accent)]/20 text-[var(--accent)] border-b-2 border-[var(--accent)]' : 'text-[var(--text-dim)] hover:bg-[var(--panel-2)]'}`}
-            onClick={() => { setMode('select'); cancelScan(); setError(null) }}
+            onClick={() => { setMode('select'); cancelScan(); setError(null); setUnifiImportResult(null) }}
           >
             <Camera size={12} className="inline mr-1" />
             Existing
@@ -1397,7 +1401,10 @@ export function AddCameraDialog({
                 className="bg-[var(--bg-2)] border border-neutral-700 px-3 py-2 text-sm"
                 placeholder="https://192.168.1.10 or unifi-nvr.local"
                 value={unifiForm.base_url}
-                onChange={(e) => setUnifiForm(f => ({ ...f, base_url: e.target.value }))}
+                onChange={(e) => {
+                  setUnifiImportResult(null)
+                  setUnifiForm(f => ({ ...f, base_url: e.target.value }))
+                }}
               />
             </label>
 
@@ -1408,7 +1415,10 @@ export function AddCameraDialog({
                   type="text"
                   className="bg-[var(--bg-2)] border border-neutral-700 px-3 py-2 text-sm"
                   value={unifiForm.username}
-                  onChange={(e) => setUnifiForm(f => ({ ...f, username: e.target.value }))}
+                  onChange={(e) => {
+                    setUnifiImportResult(null)
+                    setUnifiForm(f => ({ ...f, username: e.target.value }))
+                  }}
                 />
               </label>
               <label className="flex flex-col gap-1">
@@ -1417,7 +1427,10 @@ export function AddCameraDialog({
                   type="password"
                   className="bg-[var(--bg-2)] border border-neutral-700 px-3 py-2 text-sm"
                   value={unifiForm.password}
-                  onChange={(e) => setUnifiForm(f => ({ ...f, password: e.target.value }))}
+                  onChange={(e) => {
+                    setUnifiImportResult(null)
+                    setUnifiForm(f => ({ ...f, password: e.target.value }))
+                  }}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && !loading) {
                       e.preventDefault()
@@ -1433,7 +1446,10 @@ export function AddCameraDialog({
                 type="checkbox"
                 className="accent-[var(--accent)]"
                 checked={unifiForm.verify_tls}
-                onChange={(e) => setUnifiForm(f => ({ ...f, verify_tls: e.target.checked }))}
+                onChange={(e) => {
+                  setUnifiImportResult(null)
+                  setUnifiForm(f => ({ ...f, verify_tls: e.target.checked }))
+                }}
               />
               Verify TLS certificate
             </label>
@@ -1442,6 +1458,53 @@ export function AddCameraDialog({
               <div>Protect must have RTSP enabled for each camera you want to import.</div>
               <div>The imported main stream uses Protect RTSPS on port 7441; when available, OpenNVR also stores a low-resolution substream.</div>
             </div>
+
+            {unifiImportResult && (
+              <div className="space-y-3">
+                <div
+                  className={`rounded border p-3 text-sm ${
+                    unifiImportResult.imported.length > 0
+                      ? 'border-green-700 bg-green-900/20 text-green-300'
+                      : 'border-amber-700 bg-amber-900/20 text-amber-300'
+                  }`}
+                >
+                  Imported {unifiImportResult.imported.length} camera{unifiImportResult.imported.length === 1 ? '' : 's'}
+                  {unifiImportResult.skipped.length > 0 && ` · skipped ${unifiImportResult.skipped.length}`}
+                  {unifiImportResult.failed.length > 0 && ` · failed ${unifiImportResult.failed.length}`}
+                </div>
+
+                {(unifiImportResult.skipped.length > 0 || unifiImportResult.failed.length > 0) && (
+                  <div className="rounded border border-[var(--border)] bg-[var(--bg-2)] p-3 text-xs text-[var(--text-dim)] space-y-3">
+                    {unifiImportResult.skipped.length > 0 && (
+                      <div>
+                        <div className="font-medium text-[var(--text)] mb-1">Skipped</div>
+                        <ul className="space-y-1">
+                          {unifiImportResult.skipped.map((row) => (
+                            <li key={`skip-${row.name}-${row.ip_address || ''}`}>
+                              <span className="text-[var(--text)]">{row.name}</span>
+                              {row.ip_address ? ` (${row.ip_address})` : ''} — {row.message}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {unifiImportResult.failed.length > 0 && (
+                      <div>
+                        <div className="font-medium text-[var(--text)] mb-1">Failed</div>
+                        <ul className="space-y-1">
+                          {unifiImportResult.failed.map((row) => (
+                            <li key={`fail-${row.name}-${row.ip_address || ''}`}>
+                              <span className="text-[var(--text)]">{row.name}</span>
+                              {row.ip_address ? ` (${row.ip_address})` : ''} — {row.message}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 
